@@ -30,7 +30,7 @@ public:
 	 */
 	static inline bool IsAvailable()
 	{
-		return FModuleManager::Get().IsModuleLoaded( "LoadingScreen" );
+		return FModuleManager::Get().IsModuleLoaded("LoadingScreen");
 	}
 };
 

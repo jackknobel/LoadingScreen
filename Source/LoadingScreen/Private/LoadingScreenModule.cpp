@@ -2,7 +2,9 @@
 
 #include "ILoadingScreenModule.h"
 #include "LoadingScreenSettings.h"
-#include "SSimpleLoadingScreen.h"
+#include "LoadingScreenWidget.h"
+
+// UE Includes
 #include "Framework/Application/SlateApplication.h"
 
 #define LOCTEXT_NAMESPACE "LoadingScreen"
@@ -21,6 +23,9 @@ public:
 	}
 
 private:
+
+	TWeakObjectPtr<UWorld> ModuleWorld;
+
 	void HandlePrepareLoadingScreen();
 
 	void BeginLoadingScreen(const FLoadingScreenDescription& ScreenDescription);
@@ -35,7 +40,7 @@ FLoadingScreenModule::FLoadingScreenModule()
 
 void FLoadingScreenModule::StartupModule()
 {
-	if ( !IsRunningDedicatedServer() && FSlateApplication::IsInitialized() )
+	if ( !IsRunningDedicatedServer() && FSlateApplication::IsInitialized())
 	{
 		// Load for cooker reference
 		const ULoadingScreenSettings* Settings = GetDefault<ULoadingScreenSettings>();
@@ -48,23 +53,30 @@ void FLoadingScreenModule::StartupModule()
 			Ref.TryLoad();
 		}
 
-		if ( IsMoviePlayerEnabled() )
+		if (IsMoviePlayerEnabled())
 		{
 			GetMoviePlayer()->OnPrepareLoadingScreen().AddRaw(this, &FLoadingScreenModule::HandlePrepareLoadingScreen);
 		}
 
+		FWorldDelegates::OnPreWorldInitialization.AddLambda([this](UWorld* World, const UWorld::InitializationValues InitValues)
+		{
+			ModuleWorld = World;
+		});
+
 		// Prepare the startup screen, the PrepareLoadingScreen callback won't be called
-		// if we've already explictly setup the loading screen.
+		// if we've already explicitly setup the loading screen.
 		BeginLoadingScreen(Settings->StartupScreen);
 	}
 }
 
 void FLoadingScreenModule::ShutdownModule()
 {
-	if ( !IsRunningDedicatedServer() )
+	if (!IsRunningDedicatedServer())
 	{
 		GetMoviePlayer()->OnPrepareLoadingScreen().RemoveAll(this);
 	}
+
+	FWorldDelegates::OnPreWorldInitialization.RemoveAll(this);
 }
 
 void FLoadingScreenModule::HandlePrepareLoadingScreen()
@@ -76,20 +88,22 @@ void FLoadingScreenModule::HandlePrepareLoadingScreen()
 void FLoadingScreenModule::BeginLoadingScreen(const FLoadingScreenDescription& ScreenDescription)
 {
 	FLoadingScreenAttributes LoadingScreen;
-	LoadingScreen.MinimumLoadingScreenDisplayTime = ScreenDescription.MinimumLoadingScreenDisplayTime;
+	LoadingScreen.MinimumLoadingScreenDisplayTime	= ScreenDescription.MinimumLoadingScreenDisplayTime;
 	LoadingScreen.bAutoCompleteWhenLoadingCompletes = ScreenDescription.bAutoCompleteWhenLoadingCompletes;
-	LoadingScreen.bMoviesAreSkippable = ScreenDescription.bMoviesAreSkippable;
-	LoadingScreen.bWaitForManualStop = ScreenDescription.bWaitForManualStop;
-	LoadingScreen.MoviePaths = ScreenDescription.MoviePaths;
-	LoadingScreen.PlaybackType = ScreenDescription.PlaybackType;
-	
-	if ( ScreenDescription.bShowUIOverlay )
+	LoadingScreen.bMoviesAreSkippable				= ScreenDescription.bMoviesAreSkippable;
+	LoadingScreen.bWaitForManualStop				= ScreenDescription.bWaitForManualStop;
+	LoadingScreen.MoviePaths						= ScreenDescription.MoviePaths;
+	LoadingScreen.PlaybackType						= ScreenDescription.PlaybackType;
+
+	if (ModuleWorld.Get() != nullptr && ScreenDescription.bShowUIOverlay && ScreenDescription.UIOverlayClass != nullptr)
 	{
-		LoadingScreen.WidgetLoadingScreen = SNew(SSimpleLoadingScreen, ScreenDescription);
+		if (ULoadingScreenWidget* LoadingScreenWidget = ScreenDescription.GetLoadingScreenWidget(ModuleWorld.Get()))
+		{
+			LoadingScreen.WidgetLoadingScreen = LoadingScreenWidget->TakeWidget();
+		}
 	}
 
 	GetMoviePlayer()->SetupLoadingScreen(LoadingScreen);
 }
-
 
 #undef LOCTEXT_NAMESPACE

@@ -19,6 +19,7 @@ namespace UnrealBuildTool.Rules
 					"MoviePlayer",
 					"Slate",
 					"SlateCore",
+                    "UMG",
 					"InputCore",
 					"Engine"
 				}
