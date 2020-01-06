@@ -2,18 +2,19 @@
 
 #include "ILoadingScreenModule.h"
 #include "LoadingScreenSettings.h"
-#include "LoadingScreenWidget.h"
+#include "LoadingScreenWidgetInterface.h"
 
 // UE Includes
 #include "Framework/Application/SlateApplication.h"
+#include "Private/DefaultGameMoviePlayer.h"
+#include "UserWidget.h"
+#include "Engine/Engine.h"
 
 #define LOCTEXT_NAMESPACE "LoadingScreen"
 
 class FLoadingScreenModule : public ILoadingScreenModule
 {
 public:
-	FLoadingScreenModule();
-
 	/** IModuleInterface implementation */
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
@@ -24,48 +25,55 @@ public:
 
 private:
 
-	TWeakObjectPtr<UWorld> ModuleWorld;
+	UWorld* GetModuleWorld() const;
 
 	void HandlePrepareLoadingScreen();
 
-	void BeginLoadingScreen(const FLoadingScreenDescription& ScreenDescription);
+	void BeginLoadingScreen(FLoadingScreenDescription& ScreenDescription);
+
+	// Used to update our loading screen widget with the map we're loading
+	void OnPreLoadMap(const FString& MapName);
+
+	// Only valid while we're loading
+	TWeakObjectPtr<UUserWidget> LoadingScreenWidget;
 };
 
 IMPLEMENT_MODULE(FLoadingScreenModule, LoadingScreen)
 
-FLoadingScreenModule::FLoadingScreenModule()
+UWorld* FLoadingScreenModule::GetModuleWorld() const
 {
-
+	if (GEngine != nullptr)
+	{
+		const TIndirectArray<FWorldContext>& WorldContexts = GEngine->GetWorldContexts();
+		for (const FWorldContext& Context : WorldContexts)
+		{
+			if (Context.WorldType == EWorldType::Game || Context.WorldType == EWorldType::PIE)
+			{
+				return Context.World();
+			}
+		}
+	}
+	return nullptr;
 }
 
 void FLoadingScreenModule::StartupModule()
 {
-	if ( !IsRunningDedicatedServer() && FSlateApplication::IsInitialized())
+	if (!IsRunningDedicatedServer() && FSlateApplication::IsInitialized())
 	{
-		// Load for cooker reference
-		const ULoadingScreenSettings* Settings = GetDefault<ULoadingScreenSettings>();
-		for ( const FStringAssetReference& Ref : Settings->StartupScreen.Images )
-		{
-			Ref.TryLoad();
-		}
-		for ( const FStringAssetReference& Ref : Settings->DefaultScreen.Images )
-		{
-			Ref.TryLoad();
-		}
-
 		if (IsMoviePlayerEnabled())
 		{
 			GetMoviePlayer()->OnPrepareLoadingScreen().AddRaw(this, &FLoadingScreenModule::HandlePrepareLoadingScreen);
 		}
 
-		FWorldDelegates::OnPreWorldInitialization.AddLambda([this](UWorld* World, const UWorld::InitializationValues InitValues)
-		{
-			ModuleWorld = World;
-		});
-
 		// Prepare the startup screen, the PrepareLoadingScreen callback won't be called
 		// if we've already explicitly setup the loading screen.
-		BeginLoadingScreen(Settings->StartupScreen);
+		ULoadingScreenSettings* LoadingScreenSettings = GetMutableDefault<ULoadingScreenSettings>();
+		if (LoadingScreenSettings->bUseStartupScreen)
+		{		
+			BeginLoadingScreen(LoadingScreenSettings->StartupScreen);
+		}
+
+		FCoreUObjectDelegates::PreLoadMap.AddRaw(this, &FLoadingScreenModule::OnPreLoadMap);
 	}
 }
 
@@ -76,16 +84,23 @@ void FLoadingScreenModule::ShutdownModule()
 		GetMoviePlayer()->OnPrepareLoadingScreen().RemoveAll(this);
 	}
 
-	FWorldDelegates::OnPreWorldInitialization.RemoveAll(this);
+	FCoreUObjectDelegates::PreLoadMap.RemoveAll(this);
+}
+
+void FLoadingScreenModule::OnPreLoadMap(const FString& MapName)
+{
+	if (LoadingScreenWidget.IsValid())
+	{
+		ILoadingScreenWidgetInterface::Execute_SetLoadingLevelName(LoadingScreenWidget.Get(), MapName);
+	}
 }
 
 void FLoadingScreenModule::HandlePrepareLoadingScreen()
 {
-	const ULoadingScreenSettings* Settings = GetDefault<ULoadingScreenSettings>();
-	BeginLoadingScreen(Settings->DefaultScreen);
+	BeginLoadingScreen(GetMutableDefault<ULoadingScreenSettings>()->DefaultScreen);
 }
 
-void FLoadingScreenModule::BeginLoadingScreen(const FLoadingScreenDescription& ScreenDescription)
+void FLoadingScreenModule::BeginLoadingScreen(FLoadingScreenDescription& ScreenDescription)
 {
 	FLoadingScreenAttributes LoadingScreen;
 	LoadingScreen.MinimumLoadingScreenDisplayTime	= ScreenDescription.MinimumLoadingScreenDisplayTime;
@@ -95,9 +110,12 @@ void FLoadingScreenModule::BeginLoadingScreen(const FLoadingScreenDescription& S
 	LoadingScreen.MoviePaths						= ScreenDescription.MoviePaths;
 	LoadingScreen.PlaybackType						= ScreenDescription.PlaybackType;
 
-	if (ModuleWorld.Get() != nullptr && ScreenDescription.bShowUIOverlay && ScreenDescription.UIOverlayClass != nullptr)
+	UWorld* ModuleWorld = GetModuleWorld();
+
+	if (ModuleWorld != nullptr && ScreenDescription.bShowUIOverlay && ScreenDescription.UIOverlayClass != nullptr)
 	{
-		if (ULoadingScreenWidget* LoadingScreenWidget = ScreenDescription.GetLoadingScreenWidget(ModuleWorld.Get()))
+		LoadingScreenWidget = ScreenDescription.GetLoadingScreenWidget(ModuleWorld);
+		if (LoadingScreenWidget.IsValid())
 		{
 			LoadingScreen.WidgetLoadingScreen = LoadingScreenWidget->TakeWidget();
 		}
